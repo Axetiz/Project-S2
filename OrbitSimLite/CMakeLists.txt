@@ -29,9 +29,20 @@ target_include_directories(orbitsimlite
 )
 
 # Find SFML for the renderer and demo
-find_package(SFML 2.5 REQUIRED COMPONENTS system window graphics)
+# Prefer SFML 3 (Arch default), fallback to SFML 2.5.
+find_package(SFML 3 QUIET COMPONENTS Graphics Window System)
+if(SFML_FOUND)
+    set(ORBITSIMLITE_SFML_LIBS SFML::Graphics SFML::Window SFML::System)
+else()
+    find_package(SFML 2.5 REQUIRED COMPONENTS system window graphics)
+    if(TARGET SFML::Graphics AND TARGET SFML::Window AND TARGET SFML::System)
+        set(ORBITSIMLITE_SFML_LIBS SFML::Graphics SFML::Window SFML::System)
+    else()
+        set(ORBITSIMLITE_SFML_LIBS sfml-graphics sfml-window sfml-system)
+    endif()
+endif()
 
-target_link_libraries(orbitsimlite PUBLIC sfml-system sfml-window sfml-graphics)
+target_link_libraries(orbitsimlite PUBLIC ${ORBITSIMLITE_SFML_LIBS})
 
 if (MSVC)
     target_compile_options(orbitsimlite PRIVATE /W4 /permissive-)

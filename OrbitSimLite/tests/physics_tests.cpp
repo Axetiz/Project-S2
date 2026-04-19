@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <iostream>
+#include <algorithm>
 
 #include "physics.hpp"
 #include "simulator.hpp"
@@ -23,6 +24,7 @@ constexpr double kTolRadius = 1e-2;   // 1% relative radius tolerance
 constexpr double kTolEnergy = 5e-3;   // 0.5% relative energy tolerance
 constexpr double kTolPos = 1e-3;      // 0.1% relative position tolerance
 constexpr double kTolMomentum = 5e-3; // 0.5% relative momentum tolerance
+constexpr double kTolCenterOfMass = 1e-6;
 
 // Helper to compute relative error with basic protection against division by 0.
 double rel_error(double value, double reference) {
@@ -275,26 +277,89 @@ bool test_substeps_equivalence() {
     return err < kTolPos;
 }
 
-bool test_fixed_body_does_not_move() {
-    // A heavy body at the origin and a lighter body nearby. Over a short
-    // integration the heavy body should move much less than the light body.
-    Body fixed(1.0e26, Vec2{0.0, 0.0}, Vec2{0.0, 0.0}, 1.0, 0xFFFFFF);
-    Body mover(1.0e20, Vec2{1.0e7, 0.0}, Vec2{0.0, 0.0}, 1.0, 0xFFFFFF);
+bool test_center_of_mass_conservation_two_body() {
+    // In an isolated two-body system, the center of mass should remain nearly
+    // fixed. This is a better physics check than expecting a heavy body to
+    // stay perfectly motionless under mutual gravity.
+    Body heavy(1.0e26, Vec2{0.0, 0.0}, Vec2{0.0, 0.0}, 1.0, 0xFFFFFF);
+    Body light(1.0e20, Vec2{1.0e7, 0.0}, Vec2{0.0, 0.0}, 1.0, 0xFFFFFF);
 
     Simulator sim(Physics::DefaultG, 1.0, Integrator::Euler);
     sim.set_substeps(10);
-    sim.add_body(fixed);
-    sim.add_body(mover);
+    sim.add_body(heavy);
+    sim.add_body(light);
+
+    auto center_of_mass = [](const std::vector<Body>& bodies) {
+        Vec2 weighted_pos{0.0, 0.0};
+        double total_mass = 0.0;
+        for (const auto& body : bodies) {
+            weighted_pos += body.pos * body.mass;
+            total_mass += body.mass;
+        }
+        return weighted_pos / total_mass;
+    };
+
+    const Vec2 com0 = center_of_mass(sim.get_bodies());
+
+    for (int i = 0; i < 1000; ++i) {
+        sim.step();
+    }
+
+    const Vec2 com1 = center_of_mass(sim.get_bodies());
+    const double ref_scale = std::max(std::max(std::abs(com0.x), std::abs(com0.y)), 1.0e7);
+    const double err_x = std::abs(com1.x - com0.x) / ref_scale;
+    const double err_y = std::abs(com1.y - com0.y) / ref_scale;
+
+    return err_x < kTolCenterOfMass && err_y < kTolCenterOfMass;
+}
+
+bool test_heavy_body_moves_less_than_light_body() {
+    // Mutual gravity should move both bodies, but the heavier one should drift
+    // far less than the lighter one over the same interval.
+    Body heavy(1.0e26, Vec2{0.0, 0.0}, Vec2{0.0, 0.0}, 1.0, 0xFFFFFF);
+    Body light(1.0e20, Vec2{1.0e7, 0.0}, Vec2{0.0, 0.0}, 1.0, 0xFFFFFF);
+
+    Simulator sim(Physics::DefaultG, 1.0, Integrator::Euler);
+    sim.set_substeps(10);
+    sim.add_body(heavy);
+    sim.add_body(light);
 
     for (int i = 0; i < 1000; ++i) {
         sim.step();
     }
 
     const auto& bodies = sim.get_bodies();
-    const auto& fixed_final = bodies[0];
+    const double heavy_displacement = bodies[0].pos.length();
+    const double light_displacement = (bodies[1].pos - Vec2{1.0e7, 0.0}).length();
 
-    return std::abs(fixed_final.pos.x) < 1e-9 &&
-           std::abs(fixed_final.pos.y) < 1e-9;
+    return heavy_displacement < light_displacement * 1e-3;
+}
+
+bool test_simulator_parameter_roundtrip() {
+    Simulator sim;
+
+    sim.set_integrator(Integrator::Euler);
+    sim.set_gravity(1.234e-5);
+    sim.set_dt(42.0);
+    sim.set_substeps(0); // should clamp to 1
+
+    return sim.get_integrator() == Integrator::Euler &&
+           std::abs(sim.get_gravity() - 1.234e-5) < 1e-18 &&
+           std::abs(sim.get_dt() - 42.0) < 1e-12 &&
+           sim.get_substeps() == 1;
+}
+
+bool test_reset_time_preserves_bodies() {
+    Simulator sim(Physics::DefaultG, 3.0, Integrator::Euler);
+    sim.add_body(Body(5.0, Vec2{1.0, 2.0}, Vec2{3.0, 4.0}, 1.0, 0xFFFFFF));
+
+    sim.step();
+    sim.reset_time();
+
+    const auto& bodies = sim.get_bodies();
+    return std::abs(sim.get_time()) < 1e-12 &&
+           bodies.size() == 1 &&
+           std::abs(bodies[0].mass - 5.0) < 1e-12;
 }
 
 bool test_satellite_flag_preserved() {
@@ -330,8 +395,11 @@ int main() {
     run("momentum_conservation_two_body", &test_momentum_conservation_two_body);
     run("simulator_time_accumulation", &test_simulator_time_accumulation);
     run("substeps_equivalence", &test_substeps_equivalence);
-    run("fixed_body_does_not_move", &test_fixed_body_does_not_move);
+    run("center_of_mass_conservation_two_body", &test_center_of_mass_conservation_two_body);
+    run("heavy_body_moves_less_than_light_body", &test_heavy_body_moves_less_than_light_body);
     run("satellite_flag_preserved", &test_satellite_flag_preserved);
+    run("simulator_parameter_roundtrip", &test_simulator_parameter_roundtrip);
+    run("reset_time_preserves_bodies", &test_reset_time_preserves_bodies);
 
     double percent = 100.0 * static_cast<double>(passed) /
                      static_cast<double>(total);
