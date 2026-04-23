@@ -4,11 +4,13 @@
 #include <iostream>
 #include <vector>
 
+#include "demo_cli.hpp"
 #include "renderer.hpp"
 #include "simulator.hpp"
 #include "utils.hpp"
 
 using namespace orbitsimlite;
+using namespace orbitsimlite_demo;
 
 namespace {
 
@@ -150,14 +152,25 @@ int main() {
     presets.push_back(make_figure_eight_preset(multiplier));
     presets.push_back(make_sandbox_preset(multiplier));
 
-    const ScenarioPreset& initial = presets.front();
+    const LaunchOptions launch_options = read_launch_options(presets.size());
+    const ScenarioPreset& initial =
+        presets[launch_options.enable_sfml ? 0 : launch_options.headless_preset_idx];
     Simulator sim(initial.gravity, initial.dt, initial.integrator);
     sim.set_substeps(initial.substeps);
     sim.set_bodies(initial.bodies);
 
     Renderer renderer(1280, 840, initial.meters_to_pixels);
     renderer.set_presets(presets);
-    renderer.run(sim);
+    renderer.set_output_options(OutputOptions{
+        launch_options.enable_json,
+        launch_options.enable_csv,
+    });
+
+    if (launch_options.enable_sfml) {
+        renderer.run(sim);
+    } else {
+        renderer.run_headless(sim, launch_options.headless_real_time_seconds, initial.name);
+    }
 
     return 0;
 }

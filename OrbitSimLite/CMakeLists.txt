@@ -19,7 +19,11 @@ add_library(orbitsimlite STATIC
     ${ORBITSIMLITE_SRC_DIR}/body.cpp
     ${ORBITSIMLITE_SRC_DIR}/physics.cpp
     ${ORBITSIMLITE_SRC_DIR}/simulator.cpp
-    ${ORBITSIMLITE_SRC_DIR}/renderer.cpp
+    ${ORBITSIMLITE_SRC_DIR}/renderer_core.cpp
+    ${ORBITSIMLITE_SRC_DIR}/renderer_interaction.cpp
+    ${ORBITSIMLITE_SRC_DIR}/renderer_collision.cpp
+    ${ORBITSIMLITE_SRC_DIR}/renderer_draw.cpp
+    ${ORBITSIMLITE_SRC_DIR}/renderer_io.cpp
 )
 
 target_include_directories(orbitsimlite
@@ -65,6 +69,11 @@ if (ORBITSIMLITE_BUILD_DEMO)
     add_executable(demo_threebody_figure8 examples/demo_threebody_figure8.cpp)
     target_link_libraries(demo_threebody_figure8 PRIVATE orbitsimlite)
     target_include_directories(demo_threebody_figure8 PRIVATE ${ORBITSIMLITE_INCLUDE_DIR})
+
+    # Empty plane for manual testing and building scenes from scratch
+    add_executable(demo_simulator examples/demo_simulator.cpp)
+    target_link_libraries(demo_simulator PRIVATE orbitsimlite)
+    target_include_directories(demo_simulator PRIVATE ${ORBITSIMLITE_INCLUDE_DIR})
 endif()
 
 if (ORBITSIMLITE_BUILD_TESTS)

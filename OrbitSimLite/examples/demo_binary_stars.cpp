@@ -2,16 +2,23 @@
 #include <cstdint>
 #include <iostream>
 #include <cmath>
+#include "demo_cli.hpp"
 #include "simulator.hpp"
 #include "renderer.hpp"
 #include "utils.hpp"
 
 using namespace orbitsimlite;
+using namespace orbitsimlite_demo;
 
 int main() {
     double multiplier = 1.0;
     std::cout << "Enter simulator speed multiplier for two-suns demo: ";
     std::cin >> multiplier;
+    if (!std::cin || multiplier <= 0.0) {
+        multiplier = 1.0;
+    }
+
+    const LaunchOptions launch_options = read_launch_options();
 
     // Use a moderate timestep with substeps
     Simulator sim(Physics::DefaultG, 3600.0 * multiplier, Integrator::RK4);
@@ -39,7 +46,16 @@ int main() {
     sim.add_body(sunB);
 
     Renderer renderer(1000, 800, 2e-10);
-    renderer.run(sim);
+    renderer.set_output_options(OutputOptions{
+        launch_options.enable_json,
+        launch_options.enable_csv,
+    });
+
+    if (launch_options.enable_sfml) {
+        renderer.run(sim);
+    } else {
+        renderer.run_headless(sim, launch_options.headless_real_time_seconds, "Binary Stars");
+    }
 
     return 0;
 }

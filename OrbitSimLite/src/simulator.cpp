@@ -24,6 +24,8 @@ double Simulator::get_gravity() const { return G_; }
 void Simulator::step() {
     if (bodies_.empty()) return;
 
+    // Substeps improve stability without forcing the caller to change the
+    // public timestep; the simulator simply slices one dt into smaller pieces.
     const int n = (substeps_ > 0) ? substeps_ : 1;
     const double h = dt_ / static_cast<double>(n);
 
@@ -39,7 +41,8 @@ void Simulator::step() {
                 Physics::step_euler(bodies_[i], accs[i], h);
             }
         } else { // RK4
-            // Compute new states into a copy to avoid order dependence
+            // Compute new states into a copy to avoid order dependence between
+            // bodies during this substep.
             std::vector<Body> next = bodies_;
             for (std::size_t i = 0; i < bodies_.size(); ++i) {
                 // For RK4, exclude self from the accelerations used in intermediate stages

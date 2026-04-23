@@ -13,11 +13,13 @@
 #include <iostream>
 #include <cmath>
 
+#include "demo_cli.hpp"
 #include "simulator.hpp"
 #include "renderer.hpp"
 #include "utils.hpp"
 
 using namespace orbitsimlite;
+using namespace orbitsimlite_demo;
 
 int main() {
     double multiplier = 1.0;
@@ -30,6 +32,8 @@ int main() {
     if (!std::cin || multiplier <= 0.0) {
         multiplier = 1.0;
     }
+
+    const LaunchOptions launch_options = read_launch_options();
 
     const double G_dimless = 1.0;
     const double dt = 0.001 * multiplier; // base step
@@ -59,7 +63,16 @@ int main() {
 
     // Scale chosen so the figure‑eight fills a good portion of the window.
     Renderer renderer(1000, 800, 250.0);
-    renderer.run(sim);
+    renderer.set_output_options(OutputOptions{
+        launch_options.enable_json,
+        launch_options.enable_csv,
+    });
+
+    if (launch_options.enable_sfml) {
+        renderer.run(sim);
+    } else {
+        renderer.run_headless(sim, launch_options.headless_real_time_seconds, "Figure Eight");
+    }
 
     return 0;
 }
