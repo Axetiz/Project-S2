@@ -6,9 +6,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(GNUInstallDirs)
+enable_testing()
 
 option(ORBITSIMLITE_BUILD_DEMO "Build the demo applications" ON)
 option(ORBITSIMLITE_BUILD_TESTS "Build simple numerical tests" ON)
+option(ORBITSIMLITE_BUILD_BENCHMARKS "Build benchmark utilities" ON)
 
 # Library sources
 set(ORBITSIMLITE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -23,7 +25,8 @@ add_library(orbitsimlite STATIC
     ${ORBITSIMLITE_SRC_DIR}/renderer_interaction.cpp
     ${ORBITSIMLITE_SRC_DIR}/renderer_collision.cpp
     ${ORBITSIMLITE_SRC_DIR}/renderer_draw.cpp
-    ${ORBITSIMLITE_SRC_DIR}/renderer_io.cpp
+    ${ORBITSIMLITE_SRC_DIR}/renderer_scene.cpp
+    ${ORBITSIMLITE_SRC_DIR}/renderer_export.cpp
 )
 
 target_include_directories(orbitsimlite
@@ -80,6 +83,16 @@ if (ORBITSIMLITE_BUILD_TESTS)
     add_executable(orbitsimlite_tests tests/physics_tests.cpp)
     target_link_libraries(orbitsimlite_tests PRIVATE orbitsimlite)
     target_include_directories(orbitsimlite_tests PRIVATE ${ORBITSIMLITE_INCLUDE_DIR})
+
+    # Register the existing test executable with CTest so the project can use
+    # standard CMake-driven test workflows without rewriting the test code.
+    add_test(NAME orbitsimlite_physics_tests COMMAND orbitsimlite_tests)
+endif()
+
+if (ORBITSIMLITE_BUILD_BENCHMARKS)
+    add_executable(benchmark_integrators examples/benchmark_integrators.cpp)
+    target_link_libraries(benchmark_integrators PRIVATE orbitsimlite)
+    target_include_directories(benchmark_integrators PRIVATE ${ORBITSIMLITE_INCLUDE_DIR})
 endif()
 
 # Install rules for library-style usage

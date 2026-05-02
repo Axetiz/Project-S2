@@ -1,11 +1,9 @@
-// OrbitSimLite - Renderer import/export implementation
+// OrbitSimLite - Renderer scene and scene-file management
 #include "renderer.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <regex>
 #include <sstream>
 
@@ -13,37 +11,8 @@ namespace orbitsimlite {
 
 namespace {
 
-// CSV export is intended for spreadsheets and external plotting tools, so
-// always quote names to avoid subtle delimiter issues.
-std::string csv_escape(const std::string& value) {
-    std::string escaped = "\"";
-    for (char ch : value) {
-        if (ch == '"') {
-            escaped += "\"\"";
-        } else {
-            escaped += ch;
-        }
-    }
-    escaped += "\"";
-    return escaped;
-}
-
-std::string json_escape(const std::string& value) {
-    std::string escaped;
-    escaped.reserve(value.size() + 8);
-    for (char ch : value) {
-        switch (ch) {
-        case '\\': escaped += "\\\\"; break;
-        case '"': escaped += "\\\""; break;
-        case '\n': escaped += "\\n"; break;
-        case '\r': escaped += "\\r"; break;
-        case '\t': escaped += "\\t"; break;
-        default: escaped += ch; break;
-        }
-    }
-    return escaped;
-}
-
+// Scene file names are user-facing, so keep them simple, portable, and stable
+// across export/import, regardless of keyboard layout or punctuation.
 std::string sanitize_filename_token(std::string value) {
     for (char& ch : value) {
         const bool ok =
@@ -60,55 +29,25 @@ std::string sanitize_filename_token(std::string value) {
     return value;
 }
 
-std::string format_datetime_token() {
-    // Timestamp once per run so headless export rewrites a stable filename
-    // instead of creating a new file every simulation step.
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t now_time = std::chrono::system_clock::to_time_t(now);
-    std::tm local_tm {};
-#if defined(_WIN32)
-    localtime_s(&local_tm, &now_time);
-#else
-    localtime_r(&now_time, &local_tm);
-#endif
-    std::ostringstream oss;
-    oss << std::put_time(&local_tm, "%Y%m%d_%H%M%S");
-    return oss.str();
+bool delete_scene_file(const std::string& directory, const std::string& filename) {
+    std::error_code ec;
+    return std::filesystem::remove(std::filesystem::path(directory) / filename, ec) && !ec;
 }
 
-bool write_text_atomically(const std::string& filename, const std::string& content) {
-    // Write to a temporary file and replace the previous file only when the
-    // new snapshot is complete. Readers should never observe a half-written
-    // or temporarily empty export file.
-    const std::filesystem::path target(filename);
-    const std::filesystem::path temp = target.string() + ".tmp";
-
-    {
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            return false;
-        }
-        out << content;
-        out.flush();
-        if (!out) {
-            return false;
+std::string json_escape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (char ch : value) {
+        switch (ch) {
+        case '\\': escaped += "\\\\"; break;
+        case '"': escaped += "\\\""; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        default: escaped += ch; break;
         }
     }
-
-    std::error_code ec;
-    std::filesystem::rename(temp, target, ec);
-    if (!ec) {
-        return true;
-    }
-
-    std::filesystem::remove(target, ec);
-    ec.clear();
-    std::filesystem::rename(temp, target, ec);
-    if (ec) {
-        std::filesystem::remove(temp, ec);
-        return false;
-    }
-    return true;
+    return escaped;
 }
 
 bool extract_string_field(const std::string& text, const std::string& key, std::string& out) {
@@ -181,8 +120,6 @@ std::vector<std::string> split_top_level_objects(const std::string& array_text) 
 }
 
 bool extract_bodies_array(const std::string& text, std::string& out) {
-    // The scene loader uses a lightweight parser because the exported scene
-    // format is tightly controlled by this project.
     const std::size_t bodies_key = text.find("\"bodies\"");
     if (bodies_key == std::string::npos) {
         return false;
@@ -218,15 +155,155 @@ bool extract_bodies_array(const std::string& text, std::string& out) {
 
 } // namespace
 
-void Renderer::refresh_export_targets() {
-    // Bind export filenames to the current scene label once so later writes can
-    // simply overwrite the same JSON/CSV snapshots in place.
-    const std::string base_name =
-        "bodies_" + format_datetime_token() + "_" + sanitize_filename_token(current_export_label_);
-    current_json_export_path_ =
-        (std::filesystem::path(export_directory_) / (base_name + ".json")).string();
-    current_csv_export_path_ =
-        (std::filesystem::path(export_directory_) / (base_name + ".csv")).string();
+void Renderer::apply_scene(Simulator& sim, const ScenarioPreset& scene) {
+    // Treat scene application as a full reset of the interactive session so
+    // trails, camera, export labels, and collision prompts stay coherent.
+    current_scene_ = scene;
+    current_preset_name_ = current_scene_.name;
+    current_export_label_ = current_scene_.name;
+    refresh_export_targets();
+    sim.set_gravity(current_scene_.gravity);
+    sim.set_integrator(current_scene_.integrator);
+    sim.set_dt(current_scene_.dt * time_scale_);
+    sim.set_substeps(current_scene_.substeps);
+    sim.set_bodies(current_scene_.bodies);
+    sim.reset_time();
+    scale_ = current_scene_.meters_to_pixels;
+    camera_center_ = Vec2{0.0, 0.0};
+    zoom_ = 1.0;
+    paused_ = false;
+    collision_active_ = false;
+    custom_body_counter_ = current_scene_.bodies.size() + 1;
+    rebuild_trails(current_scene_.bodies.size());
+    sync_selected_index(sim);
+}
+
+void Renderer::apply_preset(Simulator& sim, std::size_t idx) {
+    current_preset_idx_ = idx;
+    apply_scene(sim, presets_[idx]);
+}
+
+void Renderer::begin_scene_save_dialog() {
+    scene_io_mode_ = SceneIoMode::Save;
+    scene_io_input_ = sanitize_filename_token(current_export_label_);
+    scene_io_confirm_overwrite_ = false;
+}
+
+void Renderer::begin_scene_load_dialog() {
+    refresh_saved_scene_files();
+    scene_io_mode_ = SceneIoMode::Load;
+    scene_io_confirm_delete_ = false;
+}
+
+void Renderer::handle_text_input(std::uint32_t unicode) {
+    if (scene_io_mode_ != SceneIoMode::Save) {
+        return;
+    }
+    if (unicode >= 32 && unicode < 127 && scene_io_input_.size() < 48) {
+        scene_io_input_ += static_cast<char>(unicode);
+        scene_io_confirm_overwrite_ = false;
+    }
+}
+
+bool Renderer::handle_scene_io_key(sf::Keyboard::Key key, Simulator& sim) {
+    const auto is_backspace = [&](sf::Keyboard::Key candidate) {
+#if SFML_VERSION_MAJOR >= 3
+        return candidate == sf::Keyboard::Key::Backspace;
+#else
+        return candidate == sf::Keyboard::BackSpace;
+#endif
+    };
+    const auto is_confirm = [&](sf::Keyboard::Key candidate) {
+#if SFML_VERSION_MAJOR >= 3
+        return candidate == sf::Keyboard::Key::Enter;
+#else
+        return candidate == sf::Keyboard::Enter || candidate == sf::Keyboard::Return;
+#endif
+    };
+
+    if (scene_io_mode_ == SceneIoMode::None) {
+        return false;
+    }
+
+    if (key == sf::Keyboard::Key::Escape) {
+        scene_io_mode_ = SceneIoMode::None;
+        scene_io_confirm_overwrite_ = false;
+        scene_io_confirm_delete_ = false;
+        return true;
+    }
+
+    if (scene_io_mode_ == SceneIoMode::Save) {
+        // Export mode behaves like a tiny filename editor with overwrite
+        // protection instead of silently replacing an existing scene file.
+        if (is_backspace(key) && !scene_io_input_.empty()) {
+            scene_io_input_.pop_back();
+            scene_io_confirm_overwrite_ = false;
+        } else if (key == sf::Keyboard::Key::Y && scene_io_confirm_overwrite_) {
+            scene_io_message_ = save_scene_json(sim, scene_io_input_)
+                ? "Saved to Exports/" + sanitize_filename_token(scene_io_input_) + ".json"
+                : "Save failed";
+            refresh_saved_scene_files();
+            scene_io_mode_ = SceneIoMode::None;
+            scene_io_confirm_overwrite_ = false;
+        } else if (is_confirm(key) && !scene_io_input_.empty()) {
+            const std::filesystem::path scene_path =
+                std::filesystem::path(scene_directory_) /
+                (sanitize_filename_token(scene_io_input_) + ".json");
+            if (std::filesystem::exists(scene_path) && !scene_io_confirm_overwrite_) {
+                scene_io_confirm_overwrite_ = true;
+            } else {
+                scene_io_message_ = save_scene_json(sim, scene_io_input_)
+                    ? "Saved to Exports/" + sanitize_filename_token(scene_io_input_) + ".json"
+                    : "Save failed";
+                refresh_saved_scene_files();
+                scene_io_mode_ = SceneIoMode::None;
+                scene_io_confirm_overwrite_ = false;
+            }
+        }
+        return true;
+    }
+
+    if (scene_io_mode_ == SceneIoMode::Load) {
+        // Load mode doubles as a scene manager: browse, load, or delete
+        // previously saved scenes from the same overlay.
+        if (key == sf::Keyboard::Key::Up && !saved_scene_files_.empty()) {
+            selected_saved_scene_idx_ = std::max(0, selected_saved_scene_idx_ - 1);
+            scene_io_confirm_delete_ = false;
+        } else if (key == sf::Keyboard::Key::Down && !saved_scene_files_.empty()) {
+            selected_saved_scene_idx_ =
+                std::min(static_cast<int>(saved_scene_files_.size()) - 1, selected_saved_scene_idx_ + 1);
+            scene_io_confirm_delete_ = false;
+        } else if ((key == sf::Keyboard::Key::Delete || is_backspace(key)) && !saved_scene_files_.empty()) {
+            scene_io_confirm_delete_ = true;
+        } else if (key == sf::Keyboard::Key::Y && scene_io_confirm_delete_ && !saved_scene_files_.empty()) {
+            const std::string filename =
+                saved_scene_files_[static_cast<std::size_t>(selected_saved_scene_idx_)];
+            if (delete_scene_file(scene_directory_, filename)) {
+                scene_io_message_ = "Deleted Exports/" + filename;
+                refresh_saved_scene_files();
+                scene_io_confirm_delete_ = false;
+                if (saved_scene_files_.empty()) {
+                    scene_io_mode_ = SceneIoMode::None;
+                }
+            } else {
+                scene_io_message_ = "Delete failed";
+                scene_io_confirm_delete_ = false;
+            }
+        } else if (is_confirm(key) && !saved_scene_files_.empty()) {
+            ScenarioPreset loaded_scene;
+            if (load_scene_json(saved_scene_files_[static_cast<std::size_t>(selected_saved_scene_idx_)], loaded_scene)) {
+                apply_scene(sim, loaded_scene);
+                scene_io_message_ = "Loaded " + loaded_scene.name;
+            } else {
+                scene_io_message_ = "Load failed";
+            }
+            scene_io_mode_ = SceneIoMode::None;
+            scene_io_confirm_delete_ = false;
+        }
+        return true;
+    }
+
+    return true;
 }
 
 void Renderer::refresh_saved_scene_files() {
@@ -290,7 +367,12 @@ bool Renderer::save_scene_json(const Simulator& sim, const std::string& scene_na
     }
     out << "  ]\n";
     out << "}\n";
-    return write_text_atomically(filename, out.str());
+    std::ofstream file(filename, std::ios::binary | std::ios::trunc);
+    if (!file) {
+        return false;
+    }
+    file << out.str();
+    return static_cast<bool>(file);
 }
 
 bool Renderer::load_scene_json(const std::string& filename, ScenarioPreset& preset) const {
@@ -353,87 +435,6 @@ bool Renderer::load_scene_json(const std::string& filename, ScenarioPreset& pres
     }
 
     return true;
-}
-
-void Renderer::export_simulation_data(const Simulator& sim) {
-    if (!output_options_.enable_json && !output_options_.enable_csv) {
-        return;
-    }
-
-    std::filesystem::create_directories(export_directory_);
-
-    // JSON and CSV are independent so users can choose one, the other, or both
-    // from the terminal launcher without affecting the live simulation.
-    if (output_options_.enable_json) {
-        write_state_json(sim, current_json_export_path_);
-    }
-    if (output_options_.enable_csv) {
-        write_state_csv(sim, current_csv_export_path_);
-    }
-}
-
-void Renderer::write_state_json(const Simulator& sim, const std::string& filename) const {
-    // Snapshot exports intentionally mirror the live explorer state closely so
-    // external tools can reuse the same semantics shown in the UI.
-    std::ostringstream out;
-    const auto& bodies = sim.get_bodies();
-    out << "{\n";
-    out << "  \"simulation_name\": \"" << current_export_label_ << "\",\n";
-    out << "  \"time_seconds\": " << sim.get_time() << ",\n";
-    out << "  \"time_scale\": " << time_scale_ << ",\n";
-    out << "  \"collision_mode\": \"" << collision_mode_name() << "\",\n";
-    out << "  \"body_count\": " << bodies.size() << ",\n";
-    out << "  \"bodies\": [\n";
-    for (std::size_t i = 0; i < bodies.size(); ++i) {
-        const auto& b = bodies[i];
-        const std::string name = b.name.empty() ? ("body_" + std::to_string(i)) : b.name;
-        out << "    {\n";
-        out << "      \"name\": \"" << name << "\",\n";
-        out << "      \"mass\": " << b.mass << ",\n";
-        out << "      \"radius\": " << b.radius << ",\n";
-        out << "      \"color\": " << b.color << ",\n";
-        out << "      \"is_satellite\": " << (b.is_satellite ? "true" : "false") << ",\n";
-        out << "      \"is_star\": " << (b.is_star ? "true" : "false") << ",\n";
-        out << "      \"position\": { \"x\": " << b.pos.x << ", \"y\": " << b.pos.y << " },\n";
-        out << "      \"velocity\": { \"x\": " << b.vel.x << ", \"y\": " << b.vel.y << " },\n";
-        out << "      \"acceleration\": { \"x\": " << b.acc.x << ", \"y\": " << b.acc.y << " }\n";
-        out << "    }";
-        if (i + 1 < bodies.size()) {
-            out << ",";
-        }
-        out << "\n";
-    }
-    out << "  ]\n";
-    out << "}\n";
-
-    write_text_atomically(filename, out.str());
-}
-
-void Renderer::write_state_csv(const Simulator& sim, const std::string& filename) const {
-    // CSV stays flat on purpose: one body per row, one snapshot per file write.
-    std::ostringstream out;
-    out << "time_seconds,body_index,name,mass,radius,color,is_satellite,is_star,pos_x,pos_y,vel_x,vel_y,acc_x,acc_y\n";
-    const auto& bodies = sim.get_bodies();
-    for (std::size_t i = 0; i < bodies.size(); ++i) {
-        const auto& body = bodies[i];
-        const std::string name = body.name.empty() ? ("body_" + std::to_string(i)) : body.name;
-        out << sim.get_time() << ','
-            << i << ','
-            << csv_escape(name) << ','
-            << body.mass << ','
-            << body.radius << ','
-            << body.color << ','
-            << (body.is_satellite ? 1 : 0) << ','
-            << (body.is_star ? 1 : 0) << ','
-            << body.pos.x << ','
-            << body.pos.y << ','
-            << body.vel.x << ','
-            << body.vel.y << ','
-            << body.acc.x << ','
-            << body.acc.y << '\n';
-    }
-
-    write_text_atomically(filename, out.str());
 }
 
 } // namespace orbitsimlite

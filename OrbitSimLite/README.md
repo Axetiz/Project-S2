@@ -71,6 +71,8 @@ The current version is built around four practical goals:
 ### Quality and testing
 
 - numerical and simulator tests
+- CTest integration for standard CMake test execution
+- a small benchmark utility for Euler vs RK4 runtime comparison
 - renderer split into smaller implementation files
 - headless export mode for non-visual workflows
 
@@ -103,13 +105,15 @@ The renderer implementation is split by responsibility:
 - `renderer_core.cpp`
   - renderer construction, shared helpers, interactive orchestration, headless run flow
 - `renderer_interaction.cpp`
-  - keyboard/mouse handling, body editing, scene switching, save/load interaction
+  - keyboard/mouse handling, camera control, and body editing
+- `renderer_scene.cpp`
+  - scene application, scene dialog state, save/load/delete scene workflow
+- `renderer_export.cpp`
+  - live JSON/CSV snapshot export and export filename management
 - `renderer_collision.cpp`
   - collision policies and collision-resolution flow
 - `renderer_draw.cpp`
   - fields, bodies, vectors, trails, prediction rendering, overlays, and side panel
-- `renderer_io.cpp`
-  - JSON/CSV export and named scene save/load logic
 
 This split keeps the project easier to read than a single monolithic renderer file and makes it easier to discuss each concern separately.
 
@@ -121,6 +125,7 @@ OrbitSimLite/
 ├── README.md
 ├── examples/
 │   ├── demo_binary_stars.cpp
+│   ├── benchmark_integrators.cpp
 │   ├── demo_cli.hpp
 │   ├── demo_simulator.cpp
 │   ├── demo_solar_system.cpp
@@ -139,8 +144,9 @@ OrbitSimLite/
 │   ├── renderer_collision.cpp
 │   ├── renderer_core.cpp
 │   ├── renderer_draw.cpp
+│   ├── renderer_export.cpp
 │   ├── renderer_interaction.cpp
-│   ├── renderer_io.cpp
+│   ├── renderer_scene.cpp
 │   ├── simulator.cpp
 │   └── vec2.cpp
 └── tests/
@@ -162,7 +168,7 @@ The build system prefers `SFML 3` when available and falls back to `SFML 2.5`.
 From the `OrbitSimLite/` directory:
 
 ```bash
-cmake -S . -B build -DORBITSIMLITE_BUILD_DEMO=ON -DORBITSIMLITE_BUILD_TESTS=ON
+cmake -S . -B build -DORBITSIMLITE_BUILD_DEMO=ON -DORBITSIMLITE_BUILD_TESTS=ON -DORBITSIMLITE_BUILD_BENCHMARKS=ON
 cmake --build build
 ```
 
@@ -175,6 +181,7 @@ Available demos:
 ./build/demo_binary_stars
 ./build/demo_threebody_figure8
 ./build/demo_simulator
+./build/benchmark_integrators
 ```
 
 All demos start through a shared terminal launcher. At startup, the user chooses the active output backends:
@@ -342,11 +349,11 @@ Stores automatically updated live snapshots such as:
 
 ## Tests
 
-Build and run the test suite with:
+Build and run the test suite with standard CMake / CTest commands:
 
 ```bash
 cmake --build build --target orbitsimlite_tests
-./build/orbitsimlite_tests
+cd build && ctest --output-on-failure
 ```
 
 The tests currently cover:
@@ -358,6 +365,40 @@ The tests currently cover:
 - simulator parameter roundtrips
 - reset behavior
 - body-flag preservation
+
+The physics tests are registered with CTest as:
+
+- `orbitsimlite_physics_tests`
+
+This makes the project easier to integrate into a standard CMake workflow and
+gives cleaner test execution during development and presentation.
+
+## Benchmark
+
+The project also includes a lightweight benchmark utility:
+
+```bash
+./build/benchmark_integrators
+```
+
+Its purpose is to provide practical engineering measurements for the report,
+especially when comparing the cost of `Euler` and `RK4` as body counts grow.
+
+Current sample measurements on this machine:
+
+```text
+Bodies    Method      Steps     Repeats   Avg total ms    Ms / step
+--------------------------------------------------------------------------
+10        Euler       20        2         0.085           0.00427
+10        RK4         20        2         0.562           0.02808
+100       Euler       20        2         5.939           0.29694
+100       RK4         20        2         44.764          2.23820
+500       Euler       20        2         167.534         8.37672
+500       RK4         20        2         1166.728        58.33642
+```
+
+These values are hardware-dependent, but they clearly show the expected growth
+in runtime and the higher computational cost of `RK4` compared with `Euler`.
 
 ## Project status
 

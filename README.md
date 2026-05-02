@@ -31,6 +31,8 @@ Compared with the first-semester version, this stage focuses on turning the simu
 - runtime switching between numerical methods
 - JSON and CSV export for external tools
 - cleaner architecture through renderer separation
+- CTest-based test execution
+- lightweight runtime benchmarking for integrator comparison
 - better support for testing, presentation, and user evaluation
 
 ## Representation layers
@@ -71,3 +73,4 @@ If you want the full technical picture, that file is the canonical reference for
 - export flow
 - scene import/export
 - test execution
+- benchmark usage

@@ -63,8 +63,8 @@ class Renderer {
 public:
     Renderer(unsigned width = 1000, unsigned height = 800, double meters_to_pixels = 2e-9);
 
-    // Optional preset list used by the interactive explorer. When set, keys
-    // 1-9 switch between scenarios and reset restores the current preset.
+    // Optional preset list used by the interactive explorer. When set, reset
+    // restores the active preset and headless mode can pick from the list.
     void set_presets(const std::vector<ScenarioPreset>& presets);
     void set_output_options(const OutputOptions& options);
 
@@ -97,6 +97,8 @@ private:
     void sync_selected_index(const Simulator& sim);
     void apply_scene(Simulator& sim, const ScenarioPreset& scene);
     void apply_preset(Simulator& sim, std::size_t idx);
+    void begin_scene_save_dialog();
+    void begin_scene_load_dialog();
     void handle_mouse_move(const sf::Vector2i& position);
     void handle_left_click(const sf::Vector2f& mouse_pos, const Simulator& sim);
     void begin_view_drag(const sf::Vector2i& position);
